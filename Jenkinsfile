@@ -85,7 +85,7 @@ set "PATH=%PATH%;%USERPROFILE%\\.dotnet\\tools" && dotnet-sonarscanner begin ^
       steps {
         script {
           try {
-            timeout(time: 30, unit: 'MINUTES') {
+            timeout(time: 1, unit: 'MINUTES') {
               def qg = waitForQualityGate()
               echo "Quality Gate: ${qg.status}"
               if (qg.status != 'OK') {

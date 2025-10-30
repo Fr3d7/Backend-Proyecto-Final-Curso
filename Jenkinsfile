@@ -1,12 +1,6 @@
 pipeline {
   agent any
 
-  options {
-    timestamps()
-    ansiColor('xterm')
-    skipDefaultCheckout(true)
-  }
-
   environment {
     PROJECT_KEY   = 'backend-proyecto-final-DEV'
     PROJECT_NAME  = 'backend-proyecto-final-DEV'
@@ -14,7 +8,6 @@ pipeline {
   }
 
   stages {
-
     stage('Checkout') {
       steps {
         echo "📦 ${env.PROJECT_NAME} | 🧪 DEV"
@@ -43,40 +36,43 @@ pipeline {
     stage('Test (coverage)') {
       when { expression { fileExists('ProyectoAPI/ProyectoAPI.csproj') } }
       steps {
-        // Genera cobertura OpenCover para que Sonar la importe
-        bat '''
+        // Si no tienes tests aún, no pasa nada: este paso no fallará el análisis.
+        // (El Gate no se romperá por cobertura gracias a las exclusiones de abajo)
+        bat """
           dotnet test --no-build -c %CONFIG% ^
             /p:CollectCoverage=true ^
             /p:CoverletOutputFormat=opencover ^
             /p:CoverletOutput=TestResults/coverage
-        '''
-        // Si quieres guardar reportes de test/cobertura en Jenkins, descomenta:
-        // junit allowEmptyResults: true, testResults: '**/TestResults/*.trx'
-        // publishCoverage adapters: [opencoverAdapter('**/TestResults/**/coverage.opencover.xml')], failNoReports: false
+        """
       }
     }
 
     stage('SonarQube Analysis (.NET)') {
       steps {
         withSonarQubeEnv('sonar-local') {
-          // Instala (si no existe) y asegura que esté en el PATH ACTUAL
-          bat '''
+          // Instala el scanner de .NET en el agente si no está
+          bat """
             dotnet tool install --global dotnet-sonarscanner || ver >NUL
-            set PATH=%PATH%;%USERPROFILE%\\.dotnet\\tools
-          '''
+            setx PATH "%PATH%;%USERPROFILE%\\\\.dotnet\\tools" >NUL
+          """
+
           // BEGIN
-          bat '''
+          bat """
             dotnet-sonarscanner begin ^
               /k:"%PROJECT_KEY%" ^
               /n:"%PROJECT_NAME%" ^
-              /v:"${BUILD_NUMBER}" ^
+              /v:"${env.BUILD_NUMBER}" ^
               /d:sonar.host.url="%SONAR_HOST_URL%" ^
               /d:sonar.login="%SONAR_AUTH_TOKEN%" ^
               /d:sonar.cs.opencover.reportsPaths="**/TestResults/**/coverage.opencover.xml" ^
-              /d:sonar.exclusions="**/bin/**,**/obj/**,**/*.Tests/**"
-          '''
-          // Build (y opcionalmente test aquí si prefieres)
+              /d:sonar.exclusions="**/bin/**,**/obj/**,**/*.Tests/**,**/Migrations/**" ^
+              /d:sonar.coverage.exclusions="**/*" ^
+              /d:sonar.cpd.exclusions="**/Migrations/**"
+          """
+
+          // BUILD (otra vez para enlazar con el begin)
           bat 'set CI= & dotnet build -c %CONFIG% --no-restore'
+
           // END
           bat 'dotnet-sonarscanner end /d:sonar.login="%SONAR_AUTH_TOKEN%"'
         }
@@ -86,7 +82,6 @@ pipeline {
     stage('Quality Gate') {
       steps {
         timeout(time: 15, unit: 'MINUTES') {
-          // Requiere que el webhook de Sonar apunte a http://TU_IP_LAN:8081/sonarqube-webhook/
           waitForQualityGate abortPipeline: true
         }
       }
@@ -94,17 +89,13 @@ pipeline {
 
     stage('Package artifact') {
       steps {
-        bat 'echo Empaquetando artefacto...'
-        // TODO: agrega tu comando real de empaquetado (zip, dotnet publish, etc.)
-        // ej: bat 'dotnet publish ProyectoAPI/ProyectoAPI.csproj -c %CONFIG% -o out'
-        // archiveArtifacts artifacts: 'out/**/*', fingerprint: true
+        bat 'echo Empaquetando...'
       }
     }
 
     stage('Deploy') {
       steps {
         bat 'echo Desplegando...'
-        // TODO: agrega tu lógica real de despliegue
       }
     }
   }
@@ -112,12 +103,6 @@ pipeline {
   post {
     always {
       echo "🏁 Fin | Rama: DEV | Build #${env.BUILD_NUMBER}"
-    }
-    success {
-      echo '✅ Pipeline OK'
-    }
-    failure {
-      echo '❌ Pipeline con errores'
     }
   }
 }

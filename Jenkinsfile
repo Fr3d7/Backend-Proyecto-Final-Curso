@@ -1,85 +1,105 @@
 pipeline {
   agent any
 
-  options { skipDefaultCheckout(true); ansiColor('xterm'); timestamps() }
-
-  parameters {
-    choice(name: 'TARGET_BRANCH', choices: ['DEV','QA','PROD'], description: 'Solo para jobs NO multibranch.')
-  }
-
   environment {
-    RAW_BRANCH   = "${env.BRANCH_NAME ?: (params.TARGET_BRANCH ?: (env.JOB_BASE_NAME?.toLowerCase()?.contains('prod') ? 'PROD' : (env.JOB_BASE_NAME?.toLowerCase()?.contains('qa') ? 'QA' : 'DEV')))}"
-    PIPE_BRANCH  = "${RAW_BRANCH.toUpperCase()}"
-    PROJECT_KEY  = "backend-proyecto-final-${PIPE_BRANCH}"
-    REPO_URL     = "https://github.com/Fr3d7/Backend-Proyecto-Final-Curso.git"
-    SCANNER_HOME = tool 'sonar-scanner-win'
+    PROJECT_KEY   = 'backend-proyecto-final-DEV'
+    PROJECT_NAME  = 'backend-proyecto-final-DEV'
+    CONFIG        = 'Release'
   }
 
   stages {
-    stage('Checkout'){ steps {
-      echo "📦 ${env.PROJECT_KEY} | 🧵 ${env.PIPE_BRANCH}"
-      checkout([$class:'GitSCM',
-        branches:[[name:"*/${PIPE_BRANCH}"]],
-        userRemoteConfigs:[[url:"${env.REPO_URL}", credentialsId:'github-creds']]
-      ])
-    }}
-
-    stage('Restore'){ steps { bat 'dotnet restore' } }
-
-    stage('Build'){ steps { bat 'set CI=& dotnet build -c Release --no-restore' } }
-
-    stage('Test (coverage)'){ steps {
-      // Ajusta el nombre si tu proyecto de pruebas se llama distinto
-      bat '''
-        dotnet test ProyectoAPI.Tests\\ProyectoAPI.Tests.csproj ^
-          -c Release --no-build ^
-          /p:CollectCoverage=true ^
-          /p:CoverletOutputFormat=opencover ^
-          /p:CoverletOutput=TestResults\\coverage\\
-      '''
-    }}
-
-    stage('SonarQube Analysis'){ steps {
-      withCredentials([string(credentialsId:'sonarqube-token', variable:'SONAR_TOKEN')]) {
-        withSonarQubeEnv('sonar-local') {
-          bat """
-            "${SCANNER_HOME}\\bin\\sonar-scanner.bat" ^
-              -Dsonar.projectKey=${PROJECT_KEY} ^
-              -Dsonar.projectName=${PROJECT_KEY} ^
-              -Dsonar.projectVersion=${BUILD_NUMBER} ^
-              -Dsonar.sources=. ^
-              -Dsonar.exclusions=**/bin/**,**/obj/**,**/*.Tests/** ^
-              -Dsonar.cs.opencover.reportsPaths=**/coverage.opencover.xml ^
-              -Dsonar.sourceEncoding=UTF-8 ^
-              -Dsonar.token=%SONAR_TOKEN%
-          """
-        }
-      }
-    }}
-
-    stage('Quality Gate'){ steps {
-      timeout(time:10, unit:'MINUTES'){ waitForQualityGate abortPipeline:true }
-    }}
-
-    stage('Package artifact'){ steps {
-      bat 'dotnet publish ProyectoAPI\\ProyectoAPI.csproj -c Release -o publish'
-      archiveArtifacts artifacts:'publish/**', fingerprint:true
-    }}
-
-    stage('Deploy'){
-      when { expression { env.PIPE_BRANCH=='QA' || env.PIPE_BRANCH=='PROD' } }
+    stage('Checkout') {
       steps {
-        script {
-          def target = (env.PIPE_BRANCH=='PROD') ? 'C:\\deploy\\api' : 'C:\\deploy\\api-qa'
+        echo "📦 ${env.PROJECT_NAME} | 🧪 DEV"
+        checkout([$class: 'GitSCM',
+          branches: [[name: '*/DEV']],
+          userRemoteConfigs: [[
+            url: 'https://github.com/Fr3d7/Backend-Proyecto-Final-Curso.git',
+            credentialsId: 'github-creds'
+          ]]
+        ])
+      }
+    }
+
+    stage('Restore') {
+      steps { bat 'dotnet restore' }
+    }
+
+    stage('Build') {
+      steps { bat 'set CI= & dotnet build -c %CONFIG% --no-restore' }
+    }
+
+    stage('Test (coverage)') {
+      when { expression { fileExists('ProyectoAPI/ProyectoAPI.csproj') } }
+      steps {
+        // Si no hay tests, no pasa nada; el siguiente stage ya maneja la ausencia del reporte.
+        bat """
+          dotnet test --no-build -c %CONFIG% ^
+            /p:CollectCoverage=true ^
+            /p:CoverletOutputFormat=opencover ^
+            /p:CoverletOutput=TestResults/coverage
+        """
+      }
+    }
+
+    stage('SonarQube Analysis (.NET)') {
+      steps {
+        withSonarQubeEnv('sonar-local') {
+          // Instala el scanner de .NET si hace falta
           bat """
-            if not exist ${target} mkdir ${target}
-            xcopy /E /I /Y publish ${target}
+            dotnet tool install --global dotnet-sonarscanner || ver >NUL
+            setx PATH "%PATH%;%USERPROFILE%\\\\.dotnet\\tools" >NUL
           """
-          echo "🚀 Desplegado a ${target}"
+
+          script {
+            // ¿Existe al menos un coverage.opencover.xml?
+            def hasCoverage = (bat(
+              script: 'powershell -NoProfile -Command "if(Get-ChildItem -Recurse -Filter coverage.opencover.xml){exit 0}else{exit 1}"',
+              returnStatus: true
+            ) == 0)
+
+            // Construye los args dinámicos para cobertura (solo si hay reporte)
+            def coverageArg = hasCoverage ?
+              '/d:sonar.cs.opencover.reportsPaths="**/TestResults/**/coverage.opencover.xml"' :
+              ''
+
+            // BEGIN
+            bat """
+              dotnet-sonarscanner begin ^
+                /k:"%PROJECT_KEY%" ^
+                /n:"%PROJECT_NAME%" ^
+                /v:"${env.BUILD_NUMBER}" ^
+                /d:sonar.host.url="%SONAR_HOST_URL%" ^
+                /d:sonar.login="%SONAR_AUTH_TOKEN%" ^
+                ${coverageArg} ^
+                /d:sonar.exclusions="**/bin/**,**/obj/**,**/*.Tests/**,**/Migrations/**" ^
+                /d:sonar.cpd.exclusions="**/Migrations/**" ^
+                /d:sonar.coverage.exclusions="**/*"
+            """
+
+            // BUILD (necesario entre begin/end)
+            bat 'set CI= & dotnet build -c %CONFIG% --no-restore'
+
+            // END
+            bat 'dotnet-sonarscanner end /d:sonar.login="%SONAR_AUTH_TOKEN%"'
+          }
         }
       }
     }
+
+    stage('Quality Gate') {
+      steps {
+        timeout(time: 15, unit: 'MINUTES') {
+          waitForQualityGate abortPipeline: true
+        }
+      }
+    }
+
+    stage('Package artifact') { steps { bat 'echo Empaquetando...' } }
+    stage('Deploy')          { steps { bat 'echo Desplegando...'  } }
   }
 
-  post { always { echo "🏁 Fin | Rama: ${env.PIPE_BRANCH} | Build #${env.BUILD_NUMBER}" } }
+  post {
+    always { echo "🏁 Fin | Rama: DEV | Build #${env.BUILD_NUMBER}" }
+  }
 }

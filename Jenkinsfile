@@ -58,20 +58,19 @@ pipeline {
               '/d:sonar.cs.opencover.reportsPaths="**/TestResults/**/coverage.opencover.xml"' :
               ''
 
-            // Prepara PATH solo para esta sesión y ejecuta begin/build/end
+            // 🔧 Corregido: sin ^ luego del &&  (evita el error de comillas vacías)
             bat """
-              set "PATH=%PATH%;%USERPROFILE%\\.dotnet\\tools" && ^
-              dotnet-sonarscanner begin ^
-                /k:"%PROJECT_KEY%" ^
-                /n:"%PROJECT_NAME%" ^
-                /v:"${env.BUILD_NUMBER}" ^
-                /d:sonar.host.url="%SONAR_HOST_URL%" ^
-                /d:sonar.login="%SONAR_AUTH_TOKEN%" ^
-                /d:sonar.projectBaseDir="%WORKSPACE%" ^
-                ${coverageArg} ^
-                /d:sonar.exclusions="**/bin/**,**/obj/**,**/*.Tests/**,**/Migrations/**" ^
-                /d:sonar.cpd.exclusions="**/Migrations/**" ^
-                /d:sonar.coverage.exclusions="**/*"
+set "PATH=%PATH%;%USERPROFILE%\\.dotnet\\tools" && dotnet-sonarscanner begin ^
+  /k:"%PROJECT_KEY%" ^
+  /n:"%PROJECT_NAME%" ^
+  /v:"${env.BUILD_NUMBER}" ^
+  /d:sonar.host.url="%SONAR_HOST_URL%" ^
+  /d:sonar.login="%SONAR_AUTH_TOKEN%" ^
+  /d:sonar.projectBaseDir="%WORKSPACE%" ^
+  ${coverageArg} ^
+  /d:sonar.exclusions="**/bin/**,**/obj/**,**/*.Tests/**,**/Migrations/**" ^
+  /d:sonar.cpd.exclusions="**/Migrations/**" ^
+  /d:sonar.coverage.exclusions="**/*"
             """
 
             bat 'set CI= & dotnet build -c %CONFIG% --no-restore'
@@ -101,7 +100,9 @@ pipeline {
       }
     }
 
-    stage('Package artifact') { steps { bat 'echo Empaquetando (PROD)...' } }
+    stage('Package artifact') { 
+      steps { bat 'echo Empaquetando (PROD)...' } 
+    }
 
     stage('Deploy') {
       steps {

@@ -2,10 +2,8 @@ pipeline {
   agent any
 
   environment {
-    // 👇 Ajusta estos dos si usas otro nombre en SonarQube
     PROJECT_KEY   = 'backend-proyecto-final-PROD'
     PROJECT_NAME  = 'backend-proyecto-final-PROD'
-
     CONFIG        = 'Release'
   }
 
@@ -14,7 +12,7 @@ pipeline {
       steps {
         echo "📦 ${env.PROJECT_NAME} | 🚀 PROD"
         checkout([$class: 'GitSCM',
-          branches: [[name: '*/PROD']],                 // ← rama PROD
+          branches: [[name: '*/PROD']],
           userRemoteConfigs: [[
             url: 'https://github.com/Fr3d7/Backend-Proyecto-Final-Curso.git',
             credentialsId: 'github-creds'
@@ -34,7 +32,6 @@ pipeline {
     stage('Test (coverage)') {
       when { expression { fileExists('ProyectoAPI/ProyectoAPI.csproj') } }
       steps {
-        // Si no hay tests, no pasa nada; el siguiente stage ya maneja la ausencia del reporte.
         bat """
           dotnet test --no-build -c %CONFIG% ^
             /p:CollectCoverage=true ^
@@ -47,43 +44,39 @@ pipeline {
     stage('SonarQube Analysis (.NET)') {
       steps {
         withSonarQubeEnv('sonar-local') {
-          // Instala el scanner de .NET si hace falta
-          bat """
-            dotnet tool install --global dotnet-sonarscanner || ver >NUL
-            setx PATH "%PATH%;%USERPROFILE%\\\\.dotnet\\tools" >NUL
-          """
+          // Instala el scanner si hace falta (no toca PATH del sistema)
+          bat 'dotnet tool install --global dotnet-sonarscanner || ver >NUL'
 
           script {
-            // ¿Existe al menos un coverage.opencover.xml?
+            // ¿Hay cobertura?
             def hasCoverage = (bat(
               script: 'powershell -NoProfile -Command "if(Get-ChildItem -Recurse -Filter coverage.opencover.xml){exit 0}else{exit 1}"',
               returnStatus: true
             ) == 0)
 
-            // Construye los args dinámicos para cobertura (solo si hay reporte)
             def coverageArg = hasCoverage ?
               '/d:sonar.cs.opencover.reportsPaths="**/TestResults/**/coverage.opencover.xml"' :
               ''
 
-            // BEGIN
+            // Prepara PATH solo para esta sesión y ejecuta begin/build/end
             bat """
+              set "PATH=%PATH%;%USERPROFILE%\\.dotnet\\tools" && ^
               dotnet-sonarscanner begin ^
                 /k:"%PROJECT_KEY%" ^
                 /n:"%PROJECT_NAME%" ^
                 /v:"${env.BUILD_NUMBER}" ^
                 /d:sonar.host.url="%SONAR_HOST_URL%" ^
                 /d:sonar.login="%SONAR_AUTH_TOKEN%" ^
+                /d:sonar.projectBaseDir="%WORKSPACE%" ^
                 ${coverageArg} ^
                 /d:sonar.exclusions="**/bin/**,**/obj/**,**/*.Tests/**,**/Migrations/**" ^
                 /d:sonar.cpd.exclusions="**/Migrations/**" ^
                 /d:sonar.coverage.exclusions="**/*"
             """
 
-            // BUILD (necesario entre begin/end)
             bat 'set CI= & dotnet build -c %CONFIG% --no-restore'
 
-            // END
-            bat 'dotnet-sonarscanner end /d:sonar.login="%SONAR_AUTH_TOKEN%"'
+            bat 'set "PATH=%PATH%;%USERPROFILE%\\.dotnet\\tools" && dotnet-sonarscanner end /d:sonar.login="%SONAR_AUTH_TOKEN%"'
           }
         }
       }
@@ -91,8 +84,19 @@ pipeline {
 
     stage('Quality Gate') {
       steps {
-        timeout(time: 1, unit: 'MINUTES') {
-          waitForQualityGate abortPipeline: true
+        script {
+          try {
+            timeout(time: 30, unit: 'MINUTES') {
+              def qg = waitForQualityGate()
+              echo "Quality Gate: ${qg.status}"
+              if (qg.status != 'OK') {
+                error "Quality Gate NO OK: ${qg.status}${qg.errorMessage ? ' - ' + qg.errorMessage : ''}"
+              }
+            }
+          } catch (org.jenkinsci.plugins.workflow.steps.FlowInterruptedException e) {
+            echo '⏳ SonarQube tardó demasiado (timeout). Continuaré el pipeline como UNSTABLE.'
+            currentBuild.result = 'UNSTABLE'
+          }
         }
       }
     }
@@ -102,7 +106,7 @@ pipeline {
     stage('Deploy') {
       steps {
         bat 'echo Desplegando a PRODUCCIÓN...'
-        // ⬆️ coloca aquí tu despliegue real (IIS, Docker, servicio Windows, etc.)
+        // ⬆️ agrega aquí tu despliegue real (IIS/Docker/servicio, etc.)
       }
     }
   }

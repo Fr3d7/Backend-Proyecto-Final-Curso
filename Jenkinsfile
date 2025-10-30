@@ -1,91 +1,86 @@
 pipeline {
   agent any
 
-  options {
-    skipDefaultCheckout(true)
-    ansiColor('xterm')
-    timestamps()
-  }
-
-  parameters {
-    choice(name: 'TARGET_BRANCH', choices: ['DEV', 'QA', 'PROD'], description: 'Solo para jobs NO multibranch.')
+  tools {
+    // Asegúrate de tener .NET 8 instalado en el agente
+    // y el SonarScanner for .NET como dotnet tool (ver notas abajo).
   }
 
   environment {
-    // Detecta la rama: Multibranch > parámetro > nombre del job
-    RAW_BRANCH  = "${env.BRANCH_NAME ?: (params.TARGET_BRANCH ?: (env.JOB_BASE_NAME?.toLowerCase()?.contains('prod') ? 'PROD' : (env.JOB_BASE_NAME?.toLowerCase()?.contains('qa') ? 'QA' : 'DEV')))}"
-    PIPE_BRANCH = "${RAW_BRANCH.toUpperCase()}"
-    PROJECT_KEY = "frontend-proyecto-final-${PIPE_BRANCH}"
-
-    // Usa el tool configurado en "Global Tool Configuration"
-    // (asegúrate de que exista un tool Sonar llamado exactamente 'sonar-scanner-win')
-    SCANNER_HOME = tool 'sonar-scanner-win'
-
-    REPO_URL    = "https://github.com/Fr3d7/Backend-Proyecto-Final-Curso.git"
+    PROJECT_KEY   = 'backend-proyecto-final-DEV'
+    PROJECT_NAME  = 'backend-proyecto-final-DEV'
+    CONFIG        = 'Release'
   }
 
   stages {
     stage('Checkout') {
       steps {
-        script {
-          echo "📦 Proyecto: ${env.PROJECT_KEY} | 🧵 Rama destino: ${env.PIPE_BRANCH}"
-        }
+        echo "📦 ${env.PROJECT_NAME} | 🧪 DEV"
         checkout([$class: 'GitSCM',
-          branches: [[name: "*/${PIPE_BRANCH}"]],
-          userRemoteConfigs: [[url: "${env.REPO_URL}", credentialsId: 'github-creds']]
+          branches: [[name: '*/DEV']],
+          userRemoteConfigs: [[
+            url: 'https://github.com/Fr3d7/Backend-Proyecto-Final-Curso.git',
+            credentialsId: 'github-creds'
+          ]]
         ])
       }
     }
 
-    stage('Install dependencies') {
+    stage('Restore') {
       steps {
-        bat 'npm ci || npm install'
+        bat "dotnet restore"
       }
     }
 
-    stage('Run tests (coverage)') {
+    stage('Build') {
       steps {
-        // No falla si no hay tests; si existen, genera coverage
-        bat 'npm test -- --coverage --watchAll=false --ci --passWithNoTests'
+        bat "set CI= & dotnet build -c %CONFIG% --no-restore"
       }
     }
 
-    stage('Build app') {
+    stage('Test (coverage)') {
+      when { expression { fileExists('ProyectoAPI/ProyectoAPI.csproj') } }
       steps {
-        bat '''
-          set CI=
-          npm run build
-        '''
+        // Genera cobertura OpenCover para que Sonar la lea
+        bat """
+          dotnet test --no-build -c %CONFIG% ^
+            /p:CollectCoverage=true ^
+            /p:CoverletOutputFormat=opencover ^
+            /p:CoverletOutput=TestResults/coverage
+        """
       }
     }
 
-    stage('SonarQube Analysis') {
+    stage('SonarQube Analysis (.NET)') {
       steps {
-        withCredentials([string(credentialsId: 'sonarqube-token', variable: 'SONAR_TOKEN')]) {
-          withSonarQubeEnv('sonar-local') {
-            // Aviso si no existe coverage/lcov.info (no falla)
-            bat 'if not exist coverage\\lcov.info (echo "WARN: no coverage\\lcov.info")'
-            bat """
-              "${SCANNER_HOME}\\bin\\sonar-scanner.bat" ^
-                -Dsonar.projectKey=${PROJECT_KEY} ^
-                -Dsonar.projectName=${PROJECT_KEY} ^
-                -Dsonar.projectVersion=${BUILD_NUMBER} ^
-                -Dsonar.projectBaseDir=%WORKSPACE% ^
-                -Dsonar.sources=src ^
-                -Dsonar.tests=src ^
-                -Dsonar.test.inclusions=**/*.test.js,**/*.spec.js ^
-                -Dsonar.sourceEncoding=UTF-8 ^
-                -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info ^
-                -Dsonar.token=%SONAR_TOKEN%
-            """
-          }
+        withSonarQubeEnv('sonar-local') {
+          // SonarScanner for .NET usa begin/build/test/end
+          bat """
+            dotnet tool install --global dotnet-sonarscanner || ver >NUL
+            setx PATH "%PATH%;%USERPROFILE%\\\\.dotnet\\tools" >NUL
+          """
+          bat """
+            dotnet-sonarscanner begin ^
+              /k:"%PROJECT_KEY%" ^
+              /n:"%PROJECT_NAME%" ^
+              /v:"${env.BUILD_NUMBER}" ^
+              /d:sonar.host.url="%SONAR_HOST_URL%" ^
+              /d:sonar.login="%SONAR_AUTH_TOKEN%" ^
+              /d:sonar.cs.opencover.reportsPaths="**/TestResults/**/coverage.opencover.xml" ^
+              /d:sonar.exclusions="**/bin/**,**/obj/**,**/*.Tests/**"
+          """
+          bat "set CI= & dotnet build -c %CONFIG% --no-restore"
+          // (Si ya corriste tests arriba, puedes omitirlos aquí)
+          bat """
+            dotnet-sonarscanner end /d:sonar.login="%SONAR_AUTH_TOKEN%"
+          """
         }
       }
     }
 
     stage('Quality Gate') {
       steps {
-        timeout(time: 10, unit: 'MINUTES') {
+        timeout(time: 15, unit: 'MINUTES') {
           waitForQualityGate abortPipeline: true
         }
       }
@@ -93,30 +88,22 @@ pipeline {
 
     stage('Package artifact') {
       steps {
-        archiveArtifacts artifacts: 'build/**', fingerprint: true
+        bat 'echo Empaquetando...'
+        // agrega tu empaquetado real aquí
       }
     }
 
     stage('Deploy') {
-      when {
-        expression { return env.PIPE_BRANCH == 'QA' || env.PIPE_BRANCH == 'PROD' }
-      }
       steps {
-        script {
-          def deployPath = (env.PIPE_BRANCH == 'PROD') ? 'C:\\deploy\\frontend' : 'C:\\deploy\\frontend-qa'
-          bat """
-            if not exist ${deployPath} mkdir ${deployPath}
-            xcopy /E /I /Y build ${deployPath}
-          """
-          echo "🚀 Desplegado a ${deployPath} para rama ${env.PIPE_BRANCH}"
-        }
+        bat 'echo Desplegando...'
+        // agrega tu deploy real aquí
       }
     }
   }
 
   post {
     always {
-      echo "🏁 Fin | Rama: ${env.PIPE_BRANCH} | Build: #${env.BUILD_NUMBER}"
+      echo "🏁 Fin | Rama: DEV | Build #${env.BUILD_NUMBER}"
     }
   }
 }

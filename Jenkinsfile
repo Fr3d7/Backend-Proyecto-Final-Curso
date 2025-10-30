@@ -22,22 +22,17 @@ pipeline {
     }
 
     stage('Restore') {
-      steps {
-        bat 'dotnet restore'
-      }
+      steps { bat 'dotnet restore' }
     }
 
     stage('Build') {
-      steps {
-        bat 'set CI= & dotnet build -c %CONFIG% --no-restore'
-      }
+      steps { bat 'set CI= & dotnet build -c %CONFIG% --no-restore' }
     }
 
     stage('Test (coverage)') {
       when { expression { fileExists('ProyectoAPI/ProyectoAPI.csproj') } }
       steps {
-        // Si no tienes tests aún, no pasa nada: este paso no fallará el análisis.
-        // (El Gate no se romperá por cobertura gracias a las exclusiones de abajo)
+        // Si no hay tests, no pasa nada; el siguiente stage ya maneja la ausencia del reporte.
         bat """
           dotnet test --no-build -c %CONFIG% ^
             /p:CollectCoverage=true ^
@@ -50,31 +45,44 @@ pipeline {
     stage('SonarQube Analysis (.NET)') {
       steps {
         withSonarQubeEnv('sonar-local') {
-          // Instala el scanner de .NET en el agente si no está
+          // Instala el scanner de .NET si hace falta
           bat """
             dotnet tool install --global dotnet-sonarscanner || ver >NUL
             setx PATH "%PATH%;%USERPROFILE%\\\\.dotnet\\tools" >NUL
           """
 
-          // BEGIN
-          bat """
-            dotnet-sonarscanner begin ^
-              /k:"%PROJECT_KEY%" ^
-              /n:"%PROJECT_NAME%" ^
-              /v:"${env.BUILD_NUMBER}" ^
-              /d:sonar.host.url="%SONAR_HOST_URL%" ^
-              /d:sonar.login="%SONAR_AUTH_TOKEN%" ^
-              /d:sonar.cs.opencover.reportsPaths="**/TestResults/**/coverage.opencover.xml" ^
-              /d:sonar.exclusions="**/bin/**,**/obj/**,**/*.Tests/**,**/Migrations/**" ^
-              /d:sonar.coverage.exclusions="**/*" ^
-              /d:sonar.cpd.exclusions="**/Migrations/**"
-          """
+          script {
+            // ¿Existe al menos un coverage.opencover.xml?
+            def hasCoverage = (bat(
+              script: 'powershell -NoProfile -Command "if(Get-ChildItem -Recurse -Filter coverage.opencover.xml){exit 0}else{exit 1}"',
+              returnStatus: true
+            ) == 0)
 
-          // BUILD (otra vez para enlazar con el begin)
-          bat 'set CI= & dotnet build -c %CONFIG% --no-restore'
+            // Construye los args dinámicos para cobertura (solo si hay reporte)
+            def coverageArg = hasCoverage ?
+              '/d:sonar.cs.opencover.reportsPaths="**/TestResults/**/coverage.opencover.xml"' :
+              ''
 
-          // END
-          bat 'dotnet-sonarscanner end /d:sonar.login="%SONAR_AUTH_TOKEN%"'
+            // BEGIN
+            bat """
+              dotnet-sonarscanner begin ^
+                /k:"%PROJECT_KEY%" ^
+                /n:"%PROJECT_NAME%" ^
+                /v:"${env.BUILD_NUMBER}" ^
+                /d:sonar.host.url="%SONAR_HOST_URL%" ^
+                /d:sonar.login="%SONAR_AUTH_TOKEN%" ^
+                ${coverageArg} ^
+                /d:sonar.exclusions="**/bin/**,**/obj/**,**/*.Tests/**,**/Migrations/**" ^
+                /d:sonar.cpd.exclusions="**/Migrations/**" ^
+                /d:sonar.coverage.exclusions="**/*"
+            """
+
+            // BUILD (necesario entre begin/end)
+            bat 'set CI= & dotnet build -c %CONFIG% --no-restore'
+
+            // END
+            bat 'dotnet-sonarscanner end /d:sonar.login="%SONAR_AUTH_TOKEN%"'
+          }
         }
       }
     }
@@ -87,22 +95,11 @@ pipeline {
       }
     }
 
-    stage('Package artifact') {
-      steps {
-        bat 'echo Empaquetando...'
-      }
-    }
-
-    stage('Deploy') {
-      steps {
-        bat 'echo Desplegando...'
-      }
-    }
+    stage('Package artifact') { steps { bat 'echo Empaquetando...' } }
+    stage('Deploy')          { steps { bat 'echo Desplegando...'  } }
   }
 
   post {
-    always {
-      echo "🏁 Fin | Rama: DEV | Build #${env.BUILD_NUMBER}"
-    }
+    always { echo "🏁 Fin | Rama: DEV | Build #${env.BUILD_NUMBER}" }
   }
 }

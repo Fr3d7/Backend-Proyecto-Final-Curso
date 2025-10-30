@@ -2,17 +2,19 @@ pipeline {
   agent any
 
   environment {
-    PROJECT_KEY   = 'backend-proyecto-final-DEV'
-    PROJECT_NAME  = 'backend-proyecto-final-DEV'
+    // 👇 Ajusta estos dos si usas otro nombre en SonarQube
+    PROJECT_KEY   = 'backend-proyecto-final-PROD'
+    PROJECT_NAME  = 'backend-proyecto-final-PROD'
+
     CONFIG        = 'Release'
   }
 
   stages {
     stage('Checkout') {
       steps {
-        echo "📦 ${env.PROJECT_NAME} | 🧪 DEV"
+        echo "📦 ${env.PROJECT_NAME} | 🚀 PROD"
         checkout([$class: 'GitSCM',
-          branches: [[name: '*/DEV']],
+          branches: [[name: '*/PROD']],                 // ← rama PROD
           userRemoteConfigs: [[
             url: 'https://github.com/Fr3d7/Backend-Proyecto-Final-Curso.git',
             credentialsId: 'github-creds'
@@ -95,11 +97,17 @@ pipeline {
       }
     }
 
-    stage('Package artifact') { steps { bat 'echo Empaquetando...' } }
-    stage('Deploy')          { steps { bat 'echo Desplegando...'  } }
+    stage('Package artifact') { steps { bat 'echo Empaquetando (PROD)...' } }
+
+    stage('Deploy') {
+      steps {
+        bat 'echo Desplegando a PRODUCCIÓN...'
+        // ⬆️ coloca aquí tu despliegue real (IIS, Docker, servicio Windows, etc.)
+      }
+    }
   }
 
   post {
-    always { echo "🏁 Fin | Rama: DEV | Build #${env.BUILD_NUMBER}" }
+    always { echo "🏁 Fin | Rama: PROD | Build #${env.BUILD_NUMBER}" }
   }
 }

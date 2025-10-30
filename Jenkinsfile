@@ -48,35 +48,31 @@ pipeline {
       }
     }
 
-    stage('SonarQube Analysis') {
-      steps {
-        withCredentials([string(credentialsId:'sonarqube-token', variable:'SONAR_TOKEN')]) {
-          withSonarQubeEnv('sonar-local') {
-            script {
-              // Construir argumentos evitando 'null'
-              def sonarArgs = """
-                -Dsonar.projectKey=${env.PROJECT_KEY} ^
-                -Dsonar.projectName=${env.PROJECT_KEY} ^
-                -Dsonar.projectVersion=${env.BUILD_NUMBER} ^
-                -Dsonar.sources=. ^
-                -Dsonar.exclusions=**/bin/**,**/obj/**,**/*.Tests/** ^
-                -Dsonar.sourceEncoding=UTF-8
-              """.stripIndent().trim()
+   stage('SonarQube Analysis') {
+  steps {
+    withSonarQubeEnv('sonar-local') {
+      script {
+        def sonarArgs = """
+          -Dsonar.projectKey=${env.PROJECT_KEY} ^
+          -Dsonar.projectName=${env.PROJECT_KEY} ^
+          -Dsonar.projectVersion=${env.BUILD_NUMBER} ^
+          -Dsonar.sources=. ^
+          -Dsonar.exclusions=**/bin/**,**/obj/**,**/*.Tests/** ^
+          -Dsonar.sourceEncoding=UTF-8
+        """.stripIndent().trim()
 
-              if (env.COVERAGE_ARG?.trim()) {
-                sonarArgs += " ^\n                ${env.COVERAGE_ARG}"
-              }
-
-              bat """
-                "${env.SCANNER_HOME}\\bin\\sonar-scanner.bat" ^
-                  ${sonarArgs} ^
-                  -Dsonar.token=%SONAR_TOKEN%
-              """
-            }
-          }
+        if (env.COVERAGE_ARG?.trim()) {
+          sonarArgs += " ^\n          ${env.COVERAGE_ARG}"
         }
+
+        bat """
+          "${env.SCANNER_HOME}\\bin\\sonar-scanner.bat" ^
+            ${sonarArgs}
+        """
       }
     }
+  }
+}
 
     stage('Quality Gate') {
       steps {

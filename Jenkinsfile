@@ -44,11 +44,11 @@ pipeline {
     stage('SonarQube Analysis (.NET)') {
       steps {
         withSonarQubeEnv('sonar-local') {
-          // Instala el scanner si hace falta (no toca PATH del sistema)
+          // Instala el scanner si no está presente
           bat 'dotnet tool install --global dotnet-sonarscanner || ver >NUL'
 
           script {
-            // ¿Hay cobertura?
+            // Detecta si hay reporte de cobertura
             def hasCoverage = (bat(
               script: 'powershell -NoProfile -Command "if(Get-ChildItem -Recurse -Filter coverage.opencover.xml){exit 0}else{exit 1}"',
               returnStatus: true
@@ -58,7 +58,7 @@ pipeline {
               '/d:sonar.cs.opencover.reportsPaths="**/TestResults/**/coverage.opencover.xml"' :
               ''
 
-            // 🔧 Corregido: sin ^ luego del &&  (evita el error de comillas vacías)
+            // 🔧 Corregido: sin ^ después del &&
             bat """
 set "PATH=%PATH%;%USERPROFILE%\\.dotnet\\tools" && dotnet-sonarscanner begin ^
   /k:"%PROJECT_KEY%" ^
@@ -85,11 +85,12 @@ set "PATH=%PATH%;%USERPROFILE%\\.dotnet\\tools" && dotnet-sonarscanner begin ^
       steps {
         script {
           try {
-            timeout(time: 1, unit: 'MINUTES') {
+            // ⏱ Aumentado a 5 minutos para entornos locales
+            timeout(time: 5, unit: 'MINUTES') {
               def qg = waitForQualityGate()
-              echo "Quality Gate: ${qg.status}"
+              echo "✅ Resultado del Quality Gate: ${qg.status}"
               if (qg.status != 'OK') {
-                error "Quality Gate NO OK: ${qg.status}${qg.errorMessage ? ' - ' + qg.errorMessage : ''}"
+                error "❌ Quality Gate NO OK: ${qg.status}${qg.errorMessage ? ' - ' + qg.errorMessage : ''}"
               }
             }
           } catch (org.jenkinsci.plugins.workflow.steps.FlowInterruptedException e) {
@@ -107,7 +108,7 @@ set "PATH=%PATH%;%USERPROFILE%\\.dotnet\\tools" && dotnet-sonarscanner begin ^
     stage('Deploy') {
       steps {
         bat 'echo Desplegando a PRODUCCIÓN...'
-        // ⬆️ agrega aquí tu despliegue real (IIS/Docker/servicio, etc.)
+        // ⬆️ aquí puedes colocar tu despliegue real (IIS, Docker, etc.)
       }
     }
   }

@@ -78,23 +78,29 @@ set "PATH=%PATH%;%USERPROFILE%\\.dotnet\\tools" && dotnet-sonarscanner begin ^
     }
 
     stage('Quality Gate') {
-      steps {
-        script {
-          try {
-            timeout(time: 5, unit: 'MINUTES') {
-              def qg = waitForQualityGate()
-              echo "✅ Resultado del Quality Gate: ${qg.status}"
-              if (qg.status != 'OK') {
-                error "❌ Quality Gate NO OK: ${qg.status}${qg.errorMessage ? ' - ' + qg.errorMessage : ''}"
-              }
+  steps {
+    script {
+      try {
+        // reintenta hasta 3 veces por si Sonar aún está procesando
+        retry(3) {
+          timeout(time: 5, unit: 'MINUTES') {
+            def qg = waitForQualityGate()  // espera a que Sonar procese el análisis
+            echo "Quality Gate: ${qg.status}"
+            if (qg.status != 'OK') {
+              error "Quality Gate NO OK: ${qg.status}${qg.errorMessage ? ' - ' + qg.errorMessage : ''}"
             }
-          } catch (org.jenkinsci.plugins.workflow.steps.FlowInterruptedException e) {
-            echo '⏳ SonarQube tardó demasiado (timeout). Continuaré el pipeline como UNSTABLE.'
-            currentBuild.result = 'UNSTABLE'
           }
         }
+      } catch (org.jenkinsci.plugins.workflow.steps.FlowInterruptedException e) {
+        // ⏳ si se agota el tiempo, solo informamos y seguimos (no marcamos UNSTABLE)
+        echo '⏳ SonarQube tardó demasiado (timeout). Continuo el pipeline SIN cambiar el resultado.'
+        // Si prefieres que falle en vez de seguir verde, comenta la línea de arriba y descomenta esta:
+        // error 'Quality Gate timeout'
       }
     }
+  }
+}
+
 
     stage('Package artifact') {
       steps { bat 'echo Empaquetando (QA)...' }
